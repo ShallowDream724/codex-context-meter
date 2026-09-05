@@ -98,7 +98,7 @@ def _resolve_session(home: Path, thread_id: str) -> list[tuple[Path, int | None]
             name_match = name_pattern.fullmatch(candidate.name)
             if name_match is None:
                 continue
-            resolved = candidate.resolve()
+            resolved = candidate.resolve(strict=True)
             if not resolved.is_relative_to(home):
                 raise ContextMeterError("session_outside_home", "A matching rollout points outside CODEX_HOME.")
             if resolved.is_file():
