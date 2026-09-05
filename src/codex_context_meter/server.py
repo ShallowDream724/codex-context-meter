@@ -1,8 +1,7 @@
 """Optional MCP stdio interface using the official Python SDK."""
 
-from __future__ import annotations
-
 import argparse
+import inspect
 import json
 from pathlib import Path
 from typing import Any
@@ -35,19 +34,21 @@ def create_server(codex_home: str | Path | None = None):
     from mcp.types import ToolAnnotations
 
     server = FastMCP("codex-context-meter")
+    # Older SDKs lack this option; newer SDKs otherwise infer a duplicate payload.
+    tool_options = {"structured_output": False} if "structured_output" in inspect.signature(server.tool).parameters else {}
 
     @server.tool(
         name="get_context_usage",
         annotations=ToolAnnotations(
             readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False,
         ),
+        **tool_options,
     )
-    # Any avoids a second, inferred structured payload on newer SDK versions.
     def get_context_usage(
         thread_id: str,
         stale_after_seconds: float = 120,
         auto_compact_token_limit: int | None = None,
-    ) -> Any:
+    ) -> str:
         """Check a context budget when it affects task planning; avoid routine polling.
 
         thread_id is the exact task UUID from the host or native executor CODEX_THREAD_ID;
