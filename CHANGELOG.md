@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Change MCP responses to compact JSON with status, used/window/remaining tokens, and event age. This replaces the MCP 0.1.x response schema; CLI and library results remain compatible.
+- Omit repeated identity, generic warnings, component counters, and absent compaction thresholds. Keep actionable errors and add compaction headroom only when explicitly requested.
+- Return a single minified text payload without duplicate structured output on newer MCP SDKs.
+- Preserve unknown and post-compaction states, including invalid or future timestamps.
+
 ## 0.1.1
 
 - Fix stale readings for resumed tasks whose rollout filenames include a segment UUID suffix.

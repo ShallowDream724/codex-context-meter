@@ -67,11 +67,19 @@ def test_stdio_round_trip_and_explicit_thread_binding(tmp_path, resumed):
                 assert "session_file" not in tool.inputSchema["properties"]
                 assert tool.annotations.readOnlyHint is True
                 assert tool.annotations.destructiveHint is False
+                assert getattr(tool, "outputSchema", None) is None
                 result = await session.call_tool("get_context_usage", {"thread_id": THREAD_ID})
                 assert not result.isError
+                assert len(result.content) == 1
+                assert getattr(result, "structuredContent", None) is None
                 data = json.loads(result.content[0].text)
-                assert data["remaining_estimate"]["tokens"] == (780 if resumed else 880)
-                assert data["compaction"]["threshold_source"] == "unknown"
+                assert result.content[0].text == json.dumps(data, separators=(",", ":"))
+                assert set(data) == {"status", "used_tokens", "window_tokens", "remaining_tokens", "event_age_seconds"}
+                assert data["status"] == "ok"
+                assert data["used_tokens"] == (220 if resumed else 120)
+                assert data["remaining_tokens"] == (780 if resumed else 880)
+                assert data["window_tokens"] == 1000
+                assert isinstance(data["event_age_seconds"], int)
                 assert str(tmp_path) not in json.dumps(data)
                 missing = await session.call_tool("get_context_usage", {})
                 assert missing.isError
@@ -79,5 +87,7 @@ def test_stdio_round_trip_and_explicit_thread_binding(tmp_path, resumed):
                 failure = json.loads(invalid.content[0].text)
                 assert failure["status"] == "unavailable"
                 assert failure["error"]["code"] == "invalid_thread_id"
+                assert failure["error"]["message"]
+                assert set(failure) == {"status", "error"}
 
     asyncio.run(run())

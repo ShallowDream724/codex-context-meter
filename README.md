@@ -21,7 +21,7 @@ python -m pip install ".[mcp]"
 For a pinned installation directly from GitHub:
 
 ```bash
-python -m pip install "codex-context-meter[mcp] @ git+https://github.com/ShallowDream724/codex-context-meter.git@v0.1.1"
+python -m pip install "codex-context-meter[mcp] @ git+https://github.com/ShallowDream724/codex-context-meter.git@v0.2.0"
 ```
 
 ## CLI
@@ -80,37 +80,31 @@ The UUID above is synthetic. Supply the actual caller's thread ID from the host 
 
 ## Interpret the Result
 
-Example excerpt using synthetic counters:
+Since 0.2.0, MCP returns one compact JSON text block. Example with synthetic counters:
 
 ```json
-{
-  "schema_version": 1,
-  "status": "ok",
-  "window_tokens": 353400,
-  "last_request": {
-    "input_tokens": 200000,
-    "cached_input_tokens": 190000,
-    "output_tokens": 1000,
-    "total_tokens": 201000
-  },
-  "remaining_estimate": {
-    "tokens": 152400,
-    "percent": 43.1,
-    "over_window_tokens": 0,
-    "basis": "window_tokens - last_request.total_tokens"
-  },
-  "measurement_time_known": false
-}
+{"status":"ok","used_tokens":201000,"window_tokens":353400,"remaining_tokens":152400,"event_age_seconds":4}
 ```
 
-- `last_request` comes from `info.last_token_usage`. The cumulative `total_token_usage` is never used to calculate remaining context.
-- `total_tokens` is used as recorded. Cached input and reasoning counters are not added a second time.
-- `window_tokens` comes from that log record's `model_context_window`, not a guessed model limit or a fixed percentage.
-- `event_at` and `event_age_seconds` describe the log event. Codex can repeat older counters in a newer event, so event freshness does not establish measurement freshness. `measurement_time_known` is always false.
-- `remaining_estimate` excludes unreported work and is not a live measure of retained model state. Even an `ok` result is a snapshot.
-- `status: "awaiting_usage_after_compaction"` withholds the estimate after a recognized compaction marker until changed usage counters appear. A newer timestamp repeating the same counters does not restore the estimate. If the bounded tail has no pre-compaction baseline, another distinct usage record is required.
-- `status: "window_unknown"` withholds remaining-window estimates when the record does not provide a valid window.
-- Compaction headroom stays unknown unless a caller supplies a known total-context threshold. Thresholds that count only growth after a compacted prefix are not interchangeable with total-context thresholds.
+| Field | Meaning |
+| --- | --- |
+| `status` | Snapshot availability and uncertainty, described below. |
+| `used_tokens` | Last request's recorded total, never cumulative billing. |
+| `window_tokens` | Effective window recorded in the same log event. |
+| `remaining_tokens` | Estimated window minus used tokens, floored at zero. |
+| `event_age_seconds` | Log event age in whole seconds, or `null` when unknown or invalid. |
+
+Cached input and reasoning counters are not added again. Even an `ok` result excludes unreported work; a fresh log event can repeat older counters. Event age does not establish measurement freshness.
+
+- `stale`: the log event exceeds `stale_after_seconds`; counts are historical.
+- `event_time_unknown`: the timestamp is absent, invalid, or in the future. More restrictive compaction/window statuses take precedence; the age is still `null`.
+- `awaiting_usage_after_compaction`: `used_tokens` and `remaining_tokens` are `null` until changed counters appear. A repeated count with a newer timestamp does not restore them. Without a pre-compaction baseline in the bounded tail, another distinct usage record is required.
+- `window_unknown`: `window_tokens` and `remaining_tokens` are `null`.
+- `unavailable`: the response contains `status` and an `error` object with a safe `code` and actionable `message`.
+
+Only when the caller supplies `auto_compact_token_limit`, the response adds `compaction_remaining_tokens`. It is `null` while awaiting new usage after compaction. The supplied threshold must count total context; model capacity and thresholds that count only growth after a compacted prefix cannot substitute for it.
+
+This replaces the MCP 0.1.x response format. Tool arguments are unchanged. The CLI and Python library retain their detailed version-1 schema, including timestamps, component counters, and diagnostics. For MCP consumers, `last_request.total_tokens` becomes `used_tokens`, and `remaining_estimate.tokens` becomes `remaining_tokens`. The MCP result omits repeated explanations and identity fields, and is not duplicated in `structuredContent`.
 
 Check at meaningful task boundaries, before large reads or delegations, and when planning room for results and verification. Avoid polling after every small tool call: the check itself adds conversation tokens and snapshots may not have changed.
 
@@ -118,7 +112,7 @@ Check at meaningful task boundaries, before large reads or delegations, and when
 
 The resolver searches only filenames matching the supplied UUID beneath `CODEX_HOME/sessions` and `CODEX_HOME/archived_sessions`. It supports original `rollout-...-THREAD_UUID.jsonl` files and resumed `rollout-...-THREAD_UUID_SEGMENT_UUID.jsonl` files. Every segment's `session_meta` ID must match the requested thread. The `history_base.thread_id` references must form one connected chain; the final segment is selected by those references, never by modification time. Duplicate segment IDs, branches, cycles, missing predecessors, and invalid history references produce explicit errors. Discovery is limited to 128 segments. Files resolving outside `CODEX_HOME` are rejected by the normal resolver.
 
-The reader inspects each segment's first metadata line and shares one tail budget across the chain, starting from the final segment. Inherited history ends at the recorded `history_base.end_byte_offset`; later records in a predecessor are excluded. This preserves compaction detection across segment boundaries. An empty continuation can inherit the prior snapshot, including its original event time. `--session-file` still reads only the exact selected file. The reader ignores malformed JSON and unfinished trailing records. It performs no network requests and does not modify Codex files. Tool output contains counters, timestamps, the supplied thread UUID, and diagnostic codes; it does not contain prompts, tool outputs, credentials, or local file paths.
+The reader inspects each segment's first metadata line and shares one tail budget across the chain, starting from the final segment. Inherited history ends at the recorded `history_base.end_byte_offset`; later records in a predecessor are excluded. This preserves compaction detection across segment boundaries. An empty continuation can inherit the prior snapshot, including its original event time. `--session-file` still reads only the exact selected file. The reader ignores malformed JSON and unfinished trailing records. It performs no network requests and does not modify Codex files. MCP returns budget counters, event age, and status or diagnostic codes; the CLI also includes timestamps and the supplied thread UUID. Neither returns prompts, tool outputs, credentials, or local file paths.
 
 This is a local convenience tool, not an authorization boundary between mutually untrusted clients. A client that can call it can request metadata for other known UUIDs within the configured data directory. Keep each server attached to the intended local account.
 

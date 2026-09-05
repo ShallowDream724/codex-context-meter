@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-context-meter"
-version = "0.1.1"
+version = "0.2.0"
 description = "Read the latest recorded context-window usage of an explicit Codex thread."
 readme = "README.md"
 requires-python = ">=3.10"
