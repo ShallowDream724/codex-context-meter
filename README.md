@@ -21,7 +21,7 @@ python -m pip install ".[mcp]"
 For a pinned installation directly from GitHub:
 
 ```bash
-python -m pip install "codex-context-meter[mcp] @ git+https://github.com/ShallowDream724/codex-context-meter.git@v0.1.0"
+python -m pip install "codex-context-meter[mcp] @ git+https://github.com/ShallowDream724/codex-context-meter.git@v0.1.1"
 ```
 
 ## CLI
@@ -63,6 +63,8 @@ enabled_tools = ["get_context_usage"]
 ```
 
 On Windows, use a path such as `C:/path/to/.venv/Scripts/python.exe`. A server-level `--codex-home` argument can select another fixed data directory. Reload the MCP configuration or start a new Codex task after adding the server.
+
+After upgrading the package, restart the context-meter MCP server or its host so an already-running Python process loads the updated code.
 
 The server exposes one read-only tool:
 
@@ -114,9 +116,9 @@ Check at meaningful task boundaries, before large reads or delegations, and when
 
 ## Storage and Privacy
 
-The resolver searches only filenames matching the supplied UUID beneath `CODEX_HOME/sessions` and `CODEX_HOME/archived_sessions`. It verifies the selected file's `session_meta` ID. Multiple matches are reported as ambiguous. Files resolving outside `CODEX_HOME` are rejected by the normal resolver.
+The resolver searches only filenames matching the supplied UUID beneath `CODEX_HOME/sessions` and `CODEX_HOME/archived_sessions`. It supports original `rollout-...-THREAD_UUID.jsonl` files and resumed `rollout-...-THREAD_UUID_SEGMENT_UUID.jsonl` files. Every segment's `session_meta` ID must match the requested thread. The `history_base.thread_id` references must form one connected chain; the final segment is selected by those references, never by modification time. Duplicate segment IDs, branches, cycles, missing predecessors, and invalid history references produce explicit errors. Discovery is limited to 128 segments. Files resolving outside `CODEX_HOME` are rejected by the normal resolver.
 
-The reader inspects the first metadata line and a bounded tail of the chosen file. It ignores malformed JSON and unfinished trailing records. It performs no network requests and does not modify Codex files. Tool output contains counters, timestamps, the supplied thread UUID, and diagnostic codes; it does not contain prompts, tool outputs, credentials, or local file paths.
+The reader inspects each segment's first metadata line and shares one tail budget across the chain, starting from the final segment. Inherited history ends at the recorded `history_base.end_byte_offset`; later records in a predecessor are excluded. This preserves compaction detection across segment boundaries. An empty continuation can inherit the prior snapshot, including its original event time. `--session-file` still reads only the exact selected file. The reader ignores malformed JSON and unfinished trailing records. It performs no network requests and does not modify Codex files. Tool output contains counters, timestamps, the supplied thread UUID, and diagnostic codes; it does not contain prompts, tool outputs, credentials, or local file paths.
 
 This is a local convenience tool, not an authorization boundary between mutually untrusted clients. A client that can call it can request metadata for other known UUIDs within the configured data directory. Keep each server attached to the intended local account.
 

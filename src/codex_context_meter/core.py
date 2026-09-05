@@ -9,10 +9,11 @@ import re
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 DEFAULT_SCAN_BYTES = 8 * 1024 * 1024
 MAX_SCAN_BYTES = 64 * 1024 * 1024
+MAX_HISTORY_SEGMENTS = 128
 UUID_PATTERN = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
@@ -63,8 +64,29 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _resolve_session(home: Path, thread_id: str) -> Path:
-    matches: set[Path] = set()
+def _read_header(stream: BinaryIO, thread_id: str) -> dict[str, Any]:
+    if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+        raise ContextMeterError("invalid_session_file", "The rollout must be a regular file.")
+    try:
+        header = json.loads(stream.readline(1024 * 1024))
+    except (ValueError, UnicodeDecodeError):
+        raise ContextMeterError("invalid_session_header", "The rollout has no readable session metadata.") from None
+    payload = header.get("payload") if isinstance(header, dict) else None
+    if (
+        not isinstance(header, dict)
+        or header.get("type") != "session_meta"
+        or not isinstance(payload, dict)
+        or str(payload.get("id", "")).lower() != thread_id
+    ):
+        raise ContextMeterError("session_id_mismatch", "The rollout metadata does not match the requested thread.")
+    return payload
+
+
+def _resolve_session(home: Path, thread_id: str) -> list[tuple[Path, int | None]]:
+    matches: dict[str, tuple[Path, dict[str, Any]]] = {}
+    name_pattern = re.compile(
+        rf"rollout-.+-{thread_id}(?:_({UUID_PATTERN.pattern}))?\.jsonl", re.IGNORECASE,
+    )
     # Search only rollout filenames for the supplied UUID, never the newest session.
     for folder in ("sessions", "archived_sessions"):
         root = home / folder
@@ -72,45 +94,83 @@ def _resolve_session(home: Path, thread_id: str) -> Path:
             continue
         if not root.resolve().is_relative_to(home):
             raise ContextMeterError("session_outside_home", "A rollout directory points outside CODEX_HOME.")
-        for candidate in root.rglob(f"rollout-*-{thread_id}.jsonl"):
+        for candidate in root.rglob(f"rollout-*-{thread_id}*.jsonl"):
+            name_match = name_pattern.fullmatch(candidate.name)
+            if name_match is None:
+                continue
             resolved = candidate.resolve()
             if not resolved.is_relative_to(home):
                 raise ContextMeterError("session_outside_home", "A matching rollout points outside CODEX_HOME.")
             if resolved.is_file():
-                matches.add(resolved)
+                segment_id = (name_match.group(1) or thread_id).lower()
+                if segment_id in matches:
+                    if matches[segment_id][0] == resolved:
+                        continue
+                    raise ContextMeterError("ambiguous_session", "Multiple rollouts claim the same history segment.")
+                if len(matches) >= MAX_HISTORY_SEGMENTS:
+                    raise ContextMeterError("history_limit_exceeded", "Too many rollout segments; select an exact --session-file with the CLI.")
+                with resolved.open("rb") as stream:
+                    matches[segment_id] = (resolved, _read_header(stream, thread_id))
     if not matches:
         raise ContextMeterError(
             "session_not_found",
             "No uncompressed JSONL rollout matches this thread under CODEX_HOME. "
             "Check the thread UUID, local executor, and storage location.",
         )
-    if len(matches) != 1:
+    predecessors: dict[str, tuple[str, int]] = {}
+    for segment_id, (_, metadata) in matches.items():
+        # An unsuffixed rollout can itself be a fork of a different logical thread.
+        # Only same-thread continuation segments participate in this chain.
+        if segment_id == thread_id:
+            continue
+        base = metadata.get("history_base")
+        if (
+            not isinstance(base, dict)
+            or not isinstance(base.get("thread_id"), str)
+            or not UUID_PATTERN.fullmatch(base["thread_id"])
+            or not _integer(base.get("end_byte_offset"))
+        ):
+            raise ContextMeterError("invalid_session_history", "A continuation has no valid history reference.")
+        parent = base["thread_id"].lower()
+        if parent not in matches:
+            raise ContextMeterError("incomplete_session_history", "A referenced rollout segment is missing; select an exact --session-file with the CLI.")
+        predecessors[segment_id] = (parent, base["end_byte_offset"])
+    leaves = matches.keys() - {parent for parent, _ in predecessors.values()}
+    if len(leaves) != 1:
         raise ContextMeterError(
             "ambiguous_session",
-            "Multiple rollouts match this thread; select an exact --session-file with the CLI.",
+            "Rollout history branches or cycles; select an exact --session-file with the CLI.",
         )
-    return matches.pop()
+    chain: list[tuple[Path, int | None]] = []
+    visited: set[str] = set()
+    segment_id = leaves.pop()
+    end: int | None = None
+    while segment_id not in visited:
+        visited.add(segment_id)
+        chain.append((matches[segment_id][0], end))
+        if segment_id not in predecessors:
+            break
+        segment_id, end = predecessors[segment_id]
+    if len(visited) != len(matches) or segment_id in predecessors:
+        raise ContextMeterError("ambiguous_session", "Rollout history is disconnected or cyclic.")
+    return list(reversed(chain))
 
 
-def _read_records(path: Path, thread_id: str, max_scan_bytes: int) -> tuple[list[dict[str, Any]], bool]:
+def _read_records(
+    path: Path, thread_id: str, max_scan_bytes: int, end_byte_offset: int | None = None,
+) -> tuple[list[dict[str, Any]], bool, int]:
     try:
         with path.open("rb") as stream:
-            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-                raise ContextMeterError("invalid_session_file", "The rollout must be a regular file.")
-            header_bytes = stream.readline(1024 * 1024)
-            try:
-                header = json.loads(header_bytes)
-            except (ValueError, UnicodeDecodeError):
-                raise ContextMeterError("invalid_session_header", "The rollout has no readable session metadata.") from None
-            payload = header.get("payload") if isinstance(header, dict) else None
-            if (
-                not isinstance(header, dict)
-                or header.get("type") != "session_meta"
-                or not isinstance(payload, dict)
-                or str(payload.get("id", "")).lower() != thread_id
-            ):
-                raise ContextMeterError("session_id_mismatch", "The rollout metadata does not match the requested thread.")
+            _read_header(stream, thread_id)
             size = os.fstat(stream.fileno()).st_size
+            if end_byte_offset is not None:
+                if end_byte_offset > size:
+                    raise ContextMeterError("invalid_session_history", "An inherited history boundary exceeds the rollout size.")
+                size = end_byte_offset
+                if size:
+                    stream.seek(size - 1)
+                    if stream.read(1) != b"\n":
+                        raise ContextMeterError("invalid_session_history", "An inherited history boundary splits a record.")
             start = max(0, size - max_scan_bytes)
             stream.seek(max(0, start - 1))
             before = stream.read(1) if start else b"\n"
@@ -136,7 +196,23 @@ def _read_records(path: Path, thread_id: str, max_scan_bytes: int) -> tuple[list
             continue
         if isinstance(record, dict):
             records.append(record)
-    return records, incomplete_tail
+    return records, incomplete_tail, size - start
+
+
+def _read_history(
+    chain: list[tuple[Path, int | None]], thread_id: str, max_scan_bytes: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    chunks = []
+    incomplete_tail = False
+    remaining = max_scan_bytes
+    for path, end in reversed(chain):
+        records, incomplete, scanned = _read_records(path, thread_id, remaining, end)
+        chunks.append(records)
+        incomplete_tail |= incomplete
+        remaining -= scanned
+        if remaining <= 0:
+            break
+    return [record for chunk in reversed(chunks) for record in chunk], incomplete_tail
 
 
 def read_context_usage(
@@ -171,10 +247,13 @@ def read_context_usage(
         raise ContextMeterError("invalid_time", "The observation time must include a timezone.")
     home = Path(codex_home or os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().resolve()
     try:
-        path = Path(session_file).expanduser().resolve() if session_file else _resolve_session(home, thread_id)
-    except OSError:
+        chain = (
+            [(Path(session_file).expanduser().resolve(), None)]
+            if session_file else _resolve_session(home, thread_id)
+        )
+    except (OSError, RuntimeError):
         raise ContextMeterError("session_unreadable", "The rollout location could not be inspected.") from None
-    records, incomplete_tail = _read_records(path, thread_id, max_scan_bytes)
+    records, incomplete_tail = _read_history(chain, thread_id, max_scan_bytes)
     latest: dict[str, Any] | None = None
     latest_index = -1
     compacted_index = -1

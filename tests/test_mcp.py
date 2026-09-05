@@ -16,7 +16,8 @@ from mcp.client.stdio import stdio_client
 THREAD_ID = "00000000-0000-0000-0000-000000000007"
 
 
-def test_stdio_round_trip_and_explicit_thread_binding(tmp_path):
+@pytest.mark.parametrize("resumed", [False, True])
+def test_stdio_round_trip_and_explicit_thread_binding(tmp_path, resumed):
     folder = tmp_path / "sessions" / "2026" / "01" / "01"
     folder.mkdir(parents=True)
     log = folder / f"rollout-2026-01-01T00-00-00-{THREAD_ID}.jsonl"
@@ -35,6 +36,17 @@ def test_stdio_round_trip_and_explicit_thread_binding(tmp_path):
         },
     ]
     log.write_text("".join(json.dumps(row) + "\n" for row in records), encoding="utf-8")
+    if resumed:
+        records[0]["payload"]["history_base"] = {
+            "thread_id": THREAD_ID,
+            "end_byte_offset": log.stat().st_size,
+            "end_ordinal_exclusive": len(records),
+        }
+        records[1]["payload"]["info"]["last_token_usage"] = {
+            "input_tokens": 200, "output_tokens": 20, "total_tokens": 220,
+        }
+        continuation = log.with_name(log.stem + "_00000000-0000-0000-0000-000000000008.jsonl")
+        continuation.write_text("".join(json.dumps(row) + "\n" for row in records), encoding="utf-8")
 
     async def run():
         env = dict(os.environ)
@@ -58,7 +70,7 @@ def test_stdio_round_trip_and_explicit_thread_binding(tmp_path):
                 result = await session.call_tool("get_context_usage", {"thread_id": THREAD_ID})
                 assert not result.isError
                 data = json.loads(result.content[0].text)
-                assert data["remaining_estimate"]["tokens"] == 880
+                assert data["remaining_estimate"]["tokens"] == (780 if resumed else 880)
                 assert data["compaction"]["threshold_source"] == "unknown"
                 assert str(tmp_path) not in json.dumps(data)
                 missing = await session.call_tool("get_context_usage", {})

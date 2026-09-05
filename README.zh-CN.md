@@ -42,6 +42,8 @@ enabled_tools = ["get_context_usage"]
 
 macOS 和 Linux 使用对应的 `.venv/bin/python` 路径。配置后重新加载 MCP，或开始新任务。
 
+升级包后，需要重启 context-meter MCP 服务或其宿主，让已运行的 Python 进程载入新代码。
+
 工具名为 `get_context_usage`，参数为：
 
 | 参数 | 含义 |
@@ -67,9 +69,9 @@ macOS 和 Linux 使用对应的 `.venv/bin/python` 路径。配置后重新加�
 
 ## 范围与隐私
 
-工具只按明确的 UUID，在配置目录的 `sessions` 和 `archived_sessions` 中查找文件名，随后验证日志中的任务 ID。多份匹配文件会报告歧义。常规定位流程拒绝指向配置目录外的文件。
+工具只按明确的 UUID，在配置目录的 `sessions` 和 `archived_sessions` 中查找文件。支持原始的 `rollout-...-THREAD_UUID.jsonl`，以及恢复任务后生成的 `rollout-...-THREAD_UUID_SEGMENT_UUID.jsonl`。每段日志中的任务 ID 都必须匹配，并通过 `history_base.thread_id` 构成唯一、连通的续接链，据此定位最后一段，不按文件修改时间选择。重复的分段 ID、分叉、循环、缺失前段或无效的历史引用均明确报错。最多定位128段，常规流程拒绝指向配置目录外的文件。
 
-读取范围为选定文件的首条元数据和有大小上限的尾部，默认尾部8 MiB、最多64 MiB。工具不会联网或修改 Codex 文件，返回值不包含对话正文、工具输出、密钥或本机路径。
+读取范围为各段首条元数据，以及从最后一段向前共享的尾部预算，默认8 MiB、最多64 MiB。继承的历史在 `history_base.end_byte_offset` 处截止，前段在此位置之后新增的记录不参与计算；压缩标记可跨分段识别。新分段暂无计数时，可以继承前段快照及其原始事件时间。`--session-file` 仍只读取指定的单个文件。工具不会联网或修改 Codex 文件，返回值不包含对话正文、工具输出、密钥或本机路径。
 
 该工具适合本地账户使用，不承担不可信客户端之间的访问隔离；能调用它的客户端，可以查询配置目录内其他已知 UUID 的用量元数据。仅支持未压缩的 JSONL，会话只在云端或存储格式变化时可能无法读取。
 

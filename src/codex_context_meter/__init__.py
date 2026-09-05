@@ -3,4 +3,4 @@
 from .core import ContextMeterError, read_context_usage
 
 __all__ = ["ContextMeterError", "read_context_usage"]
-__version__ = "0.1.0"
+__version__ = "0.1.1"

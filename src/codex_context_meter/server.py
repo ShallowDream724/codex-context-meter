@@ -22,7 +22,9 @@ def create_server(codex_home: str | Path | None = None):
             "The service process environment does not identify the caller's thread. "
             "Results are delayed snapshots, not live token counters. Check at meaningful task boundaries, "
             "especially before large reads or delegations. Compaction headroom is unknown unless an "
-            "explicit total-context threshold is supplied."
+            "explicit total-context threshold is supplied. Each call reads local rollout files directly; "
+            "there is no background recorder or event subscription. A stale timestamp alone does not "
+            "establish why the counters have not changed."
         ),
     )
 
@@ -41,6 +43,8 @@ def create_server(codex_home: str | Path | None = None):
 
         thread_id must be the actual caller's Codex UUID. Counters are from the last
         recorded request, not cumulative billing. A fresh event can repeat old counters.
+        Reads are on demand from local rollout files; there is no background recorder.
+        A stale timestamp alone does not establish the cause of missing updates.
         auto_compact_token_limit, when known, must count the full active context.
         It is not inferred from model capacity or a fixed percentage.
         """
