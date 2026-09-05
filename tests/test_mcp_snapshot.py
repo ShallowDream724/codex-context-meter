@@ -36,7 +36,7 @@ def test_compact_budget_omits_diagnostics_and_cumulative_usage(tmp_path):
 
     assert _compact_snapshot(detailed) == {
         "status": "ok", "used_tokens": 400, "window_tokens": 1000,
-        "remaining_tokens": 600, "event_age_seconds": 1,
+        "remaining_tokens": 600, "remaining_percent": 60.0, "event_age_seconds": 1,
     }
     assert json.dumps(detailed) == before
 
@@ -61,6 +61,7 @@ def test_compaction_withholds_used_remaining_and_threshold_budgets(tmp_path, age
     assert result["status"] == "awaiting_usage_after_compaction"
     assert result["used_tokens"] is None
     assert result["remaining_tokens"] is None
+    assert result["remaining_percent"] is None
     assert result["compaction_remaining_tokens"] is None
 
 
@@ -71,15 +72,24 @@ def test_unknown_window_does_not_invent_remaining_tokens(tmp_path, age):
     assert result["used_tokens"] == 400
     assert result["window_tokens"] is None
     assert result["remaining_tokens"] is None
+    assert result["remaining_percent"] is None
 
 
 def test_explicit_threshold_adds_only_its_remaining_budget(tmp_path):
     result = _compact_snapshot(snapshot(tmp_path, auto_compact_token_limit=800))
     assert result["compaction_remaining_tokens"] == 400
+    assert result["remaining_percent"] == 60.0
 
 
 def test_over_window_counters_are_visible_with_zero_remaining(tmp_path):
     result = _compact_snapshot(snapshot(tmp_path, used=1200, auto_compact_token_limit=900))
     assert result["used_tokens"] == 1200
     assert result["remaining_tokens"] == 0
+    assert result["remaining_percent"] == 0.0
     assert result["compaction_remaining_tokens"] == 0
+
+
+@pytest.mark.parametrize("window,used,expected", [(3000, 1000, 66.7), (1000, 999, 0.1), (1000, 1000, 0.0)])
+def test_remaining_percentage_uses_window_and_rounds_to_one_decimal(tmp_path, window, used, expected):
+    result = _compact_snapshot(snapshot(tmp_path, window=window, used=used))
+    assert result["remaining_percent"] == expected

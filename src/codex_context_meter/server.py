@@ -22,6 +22,7 @@ def _compact_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         "used_tokens": None if awaiting_usage else snapshot["last_request"]["total_tokens"],
         "window_tokens": snapshot["window_tokens"],
         "remaining_tokens": remaining["tokens"] if remaining is not None else None,
+        "remaining_percent": remaining["percent"] if remaining is not None else None,
         "event_age_seconds": int(age) if valid_age else None,
     }
     if snapshot["compaction"]["threshold_tokens"] is not None:
@@ -51,9 +52,13 @@ def create_server(codex_home: str | Path | None = None):
     ) -> str:
         """Check a context budget when it affects task planning; avoid routine polling.
 
-        thread_id is the exact task UUID from the host or native executor CODEX_THREAD_ID;
-        never infer it from cwd, the newest log, or the shared server environment.
-        Returns JSON: status, used_tokens, window_tokens, remaining_tokens, event_age_seconds.
+        Use the requested task's exact UUID. For the current Codex task, prefer
+        nodeRepl.requestMeta.threadId when exposed by node_repl. Otherwise read
+        CODEX_THREAD_ID via native exec_command. MCP shells such as FastCtx.run
+        do not reliably identify the caller; never infer identity from cwd or the newest log.
+        Returns JSON: status, used_tokens, window_tokens, remaining_tokens,
+        remaining_percent, event_age_seconds. The percentage uses the recorded window,
+        rounded to one decimal; it does not measure headroom to auto-compaction.
         Counts are last-request snapshots; even fresh log events can repeat old counters.
         stale means historical data; event_time_unknown means an unreliable timestamp.
         Null budgets are unknown, including while awaiting usage after compaction.

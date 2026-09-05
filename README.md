@@ -21,7 +21,7 @@ python -m pip install ".[mcp]"
 For a pinned installation directly from GitHub:
 
 ```bash
-python -m pip install "codex-context-meter[mcp] @ git+https://github.com/ShallowDream724/codex-context-meter.git@v0.2.0"
+python -m pip install "codex-context-meter[mcp] @ git+https://github.com/ShallowDream724/codex-context-meter.git@v0.2.1"
 ```
 
 ## CLI
@@ -76,14 +76,14 @@ get_context_usage(
 )
 ```
 
-The UUID above is synthetic. Supply the actual caller's thread ID from the host or its native executor's `CODEX_THREAD_ID`. The MCP tool deliberately requires this argument: a shared server process's environment does not reliably identify the calling conversation. It never lists unrelated sessions, exposes arbitrary file paths, or infers identity from the latest modified file.
+The UUID above is synthetic. Supply the requested task's exact UUID. For the current task in Codex, use `nodeRepl.requestMeta.threadId` when exposed by `node_repl`; otherwise read `CODEX_THREAD_ID` through the native `exec_command` tool. MCP-based shells such as FastCtx `run` may expose their shared server's environment instead of the caller's. The meter requires an explicit UUID and never infers identity from a working directory or the latest modified file.
 
 ## Interpret the Result
 
 Since 0.2.0, MCP returns one compact JSON text block. Example with synthetic counters:
 
 ```json
-{"status":"ok","used_tokens":201000,"window_tokens":353400,"remaining_tokens":152400,"event_age_seconds":4}
+{"status":"ok","used_tokens":201000,"window_tokens":353400,"remaining_tokens":152400,"remaining_percent":43.1,"event_age_seconds":4}
 ```
 
 | Field | Meaning |
@@ -92,17 +92,18 @@ Since 0.2.0, MCP returns one compact JSON text block. Example with synthetic cou
 | `used_tokens` | Last request's recorded total, never cumulative billing. |
 | `window_tokens` | Effective window recorded in the same log event. |
 | `remaining_tokens` | Estimated window minus used tokens, floored at zero. |
+| `remaining_percent` | Remaining fraction of the recorded window, as 0-100%, rounded to one decimal. Added in 0.2.1. |
 | `event_age_seconds` | Log event age in whole seconds, or `null` when unknown or invalid. |
 
 Cached input and reasoning counters are not added again. Even an `ok` result excludes unreported work; a fresh log event can repeat older counters. Event age does not establish measurement freshness.
 
 - `stale`: the log event exceeds `stale_after_seconds`; counts are historical.
 - `event_time_unknown`: the timestamp is absent, invalid, or in the future. More restrictive compaction/window statuses take precedence; the age is still `null`.
-- `awaiting_usage_after_compaction`: `used_tokens` and `remaining_tokens` are `null` until changed counters appear. A repeated count with a newer timestamp does not restore them. Without a pre-compaction baseline in the bounded tail, another distinct usage record is required.
-- `window_unknown`: `window_tokens` and `remaining_tokens` are `null`.
+- `awaiting_usage_after_compaction`: `used_tokens`, `remaining_tokens`, and `remaining_percent` are `null` until changed counters appear. A repeated count with a newer timestamp does not restore them. Without a pre-compaction baseline in the bounded tail, another distinct usage record is required.
+- `window_unknown`: `window_tokens`, `remaining_tokens`, and `remaining_percent` are `null`.
 - `unavailable`: the response contains `status` and an `error` object with a safe `code` and actionable `message`.
 
-Only when the caller supplies `auto_compact_token_limit`, the response adds `compaction_remaining_tokens`. It is `null` while awaiting new usage after compaction. The supplied threshold must count total context; model capacity and thresholds that count only growth after a compacted prefix cannot substitute for it.
+Only when the caller supplies `auto_compact_token_limit`, the response adds `compaction_remaining_tokens`. It is `null` while awaiting new usage after compaction. The supplied threshold must count total context; model capacity and thresholds that count only growth after a compacted prefix cannot substitute for it. `remaining_percent` always uses the recorded window, not the compaction threshold.
 
 This replaces the MCP 0.1.x response format. Tool arguments are unchanged. The CLI and Python library retain their detailed version-1 schema, including timestamps, component counters, and diagnostics. For MCP consumers, `last_request.total_tokens` becomes `used_tokens`, and `remaining_estimate.tokens` becomes `remaining_tokens`. The MCP result omits repeated explanations and identity fields, and is not duplicated in `structuredContent`.
 

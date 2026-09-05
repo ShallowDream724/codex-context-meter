@@ -52,14 +52,14 @@ macOS 和 Linux 使用对应的 `.venv/bin/python` 路径。配置后重新加�
 | `stale_after_seconds` | 事件超过多少秒标为陈旧，默认120秒。 |
 | `auto_compact_token_limit` | 可选，已知的总上下文压缩阈值。默认未知。 |
 
-共享 MCP 进程不能可靠地从自身环境识别调用它的对话，因此该接口不会自动使用服务器进程的 `CODEX_THREAD_ID`。任务 ID 应来自宿主信息或 Codex 原生终端环境；工具也不会选择“最新日志”作为替代。
+传入目标任务的准确 UUID。查询当前 Codex 任务时，优先使用 `node_repl` 暴露的 `nodeRepl.requestMeta.threadId`；否则通过原生 `exec_command` 读取 `CODEX_THREAD_ID`。FastCtx `run` 等 MCP 终端可能暴露共享服务进程的环境，无法可靠识别调用方。工具不会按工作目录或“最新日志”猜测任务身份。
 
 ## MCP 返回值
 
 从0.2.0起，MCP 默认返回一份紧凑 JSON 文本，以下使用合成计数：
 
 ```json
-{"status":"ok","used_tokens":201000,"window_tokens":353400,"remaining_tokens":152400,"event_age_seconds":4}
+{"status":"ok","used_tokens":201000,"window_tokens":353400,"remaining_tokens":152400,"remaining_percent":43.1,"event_age_seconds":4}
 ```
 
 | 字段 | 含义 |
@@ -68,17 +68,18 @@ macOS 和 Linux 使用对应的 `.venv/bin/python` 路径。配置后重新加�
 | `used_tokens` | 最近一次请求的总 token 数，不使用累计费用计数。 |
 | `window_tokens` | 同一日志事件记录的有效窗口。 |
 | `remaining_tokens` | 窗口减去已用量的估算，最低为0。 |
+| `remaining_percent` | 剩余量占日志有效窗口的百分比，范围0-100，保留一位小数。0.2.1新增。 |
 | `event_age_seconds` | 日志事件距今的整秒数；时间未知或异常时为 `null`。 |
 
 缓存和推理 token 不再次叠加。读数不包含尚未记录的新工作；较新的日志事件也可能重复旧计数，因此 `ok` 仍是快照。
 
 - `stale`：日志超过 `stale_after_seconds`，计数仅作历史参考。
 - `event_time_unknown`：时间戳缺失、无效或位于未来。压缩等待或窗口未知状态优先，事件年龄仍为 `null`。
-- `awaiting_usage_after_compaction`：`used_tokens` 和 `remaining_tokens` 均为 `null`，直到观察到变化后的计数；仅重复旧计数不会恢复估算。扫描范围内没有压缩前基准时，需要另一个不同的用量记录。
-- `window_unknown`：`window_tokens` 和 `remaining_tokens` 为 `null`。
+- `awaiting_usage_after_compaction`：`used_tokens`、`remaining_tokens` 和 `remaining_percent` 均为 `null`，直到观察到变化后的计数；仅重复旧计数不会恢复估算。扫描范围内没有压缩前基准时，需要另一个不同的用量记录。
+- `window_unknown`：`window_tokens`、`remaining_tokens` 和 `remaining_percent` 为 `null`。
 - `unavailable`：返回 `status` 和含 `code`、`message` 的错误对象。
 
-仅当调用方显式提供 `auto_compact_token_limit` 时，增加 `compaction_remaining_tokens`；压缩后等待新计数时该字段为 `null`。阈值必须按总上下文计算，不从模型容量或压缩后的新增量推算。
+仅当调用方显式提供 `auto_compact_token_limit` 时，增加 `compaction_remaining_tokens`；压缩后等待新计数时该字段为 `null`。阈值必须按总上下文计算，不从模型容量或压缩后的新增量推算。`remaining_percent` 始终以日志中的有效窗口为分母，不表示距离自动压缩的余量比例。
 
 0.2.0 调整了 MCP 的返回格式，调用参数保持兼容。旧字段 `last_request.total_tokens` 对应 `used_tokens`，`remaining_estimate.tokens` 对应 `remaining_tokens`。默认结果省去重复说明、身份回显及非必要诊断，也不在 `structuredContent` 中重复返回。CLI 和 Python 库保留原有完整格式，可查询时间戳、分项计数及诊断信息。
 

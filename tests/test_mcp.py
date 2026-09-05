@@ -74,10 +74,11 @@ def test_stdio_round_trip_and_explicit_thread_binding(tmp_path, resumed):
                 assert getattr(result, "structuredContent", None) is None
                 data = json.loads(result.content[0].text)
                 assert result.content[0].text == json.dumps(data, separators=(",", ":"))
-                assert set(data) == {"status", "used_tokens", "window_tokens", "remaining_tokens", "event_age_seconds"}
+                assert set(data) == {"status", "used_tokens", "window_tokens", "remaining_tokens", "remaining_percent", "event_age_seconds"}
                 assert data["status"] == "ok"
                 assert data["used_tokens"] == (220 if resumed else 120)
                 assert data["remaining_tokens"] == (780 if resumed else 880)
+                assert data["remaining_percent"] == (78.0 if resumed else 88.0)
                 assert data["window_tokens"] == 1000
                 assert isinstance(data["event_age_seconds"], int)
                 assert str(tmp_path) not in json.dumps(data)

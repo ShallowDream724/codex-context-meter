@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Add `remaining_percent` to compact MCP snapshots, using the recorded window and one decimal place; unknown and post-compaction budgets remain null.
+- Clarify current-task ID lookup through `nodeRepl.requestMeta.threadId` or native `exec_command`, including why shared MCP shell environments are unsuitable.
+
 ## 0.2.0
 
 - Change MCP responses to compact JSON with status, used/window/remaining tokens, and event age. This replaces the MCP 0.1.x response schema; CLI and library results remain compatible.
