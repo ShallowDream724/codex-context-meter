@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-context-meter"
+version = "0.1.0"
+description = "Read the latest recorded context-window usage of an explicit Codex thread."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+keywords = ["codex", "mcp", "context-window", "tokens"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "License :: OSI Approved :: MIT License",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.9.2,<2"]
+dev = ["pytest>=8,<9", "build>=1,<2", "mcp>=1.9.2,<2"]
+
+[project.scripts]
+codex-context-meter = "codex_context_meter.cli:main"
+codex-context-meter-mcp = "codex_context_meter.server:main"
+
+[project.urls]
+Homepage = "https://github.com/ShallowDream724/codex-context-meter"
+Issues = "https://github.com/ShallowDream724/codex-context-meter/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
